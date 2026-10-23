@@ -259,6 +259,76 @@
         color: var(--muted);
         margin: 0;
       }
+      a.btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        color: inherit;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 14px;
+        flex: 1 1 140px;
+      }
+      a.btn.primary {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .row > button {
+        flex: 1 1 140px;
+      }
+      a.btn:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .libs {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .lib {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--bg);
+      }
+      .lib[aria-current="true"] {
+        border-color: var(--accent);
+      }
+      .lib .meta {
+        flex: 1;
+        min-width: 0;
+      }
+      .lib .name {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .lib .prog {
+        font-size: 12px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .lib button {
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .lib .del.armed {
+        background: #5a2330;
+        border-color: #8a3446;
+      }
+      .small {
+        font-size: 12px;
+      }
       @media (orientation: landscape) and (max-height: 500px) {
         .wrap {
           padding-block: 0;
@@ -277,7 +347,7 @@
       <div class="stage">
         <div id="player"></div>
         <div class="empty" id="empty">
-          아래 「목록 설정」에 유튜브 재생목록이나 영상 링크를 넣어 주세요.
+          아래 「새 목록 추가」에 유튜브 재생목록이나 영상 링크를 넣어 주세요.
         </div>
       </div>
 
@@ -297,8 +367,18 @@
       </div>
       <div class="status" id="status"></div>
 
+      <details id="libBox">
+        <summary>내 재생목록</summary>
+        <div class="inner">
+          <ul class="libs" id="libs"></ul>
+          <p class="hint" id="libEmpty">
+            아직 저장된 목록이 없음. 「새 목록 추가」에서 불러오면 여기에 남음.
+          </p>
+        </div>
+      </details>
+
       <details id="setup">
-        <summary>목록 설정</summary>
+        <summary>새 목록 추가</summary>
         <div class="inner">
           <label for="src"
             >재생목록 링크, 또는 영상 링크를 한 줄에 하나씩
@@ -323,7 +403,55 @@
           </div>
           <p class="hint">
             영상 끝에서 이 시간만큼 남으면 바로 다음 화로 넘어감. 화마다 다르면
-            크레딧 시작 시점에 위의 분홍 버튼을 누르면 그 화만 따로 기억함.
+            크레딧 시작 시점에 위의 분홍 버튼을 누르면 그 화만 따로 기억함. 이미
+            저장된 재생목록을 다시 넣으면 보던 위치는 그대로 유지됨.
+          </p>
+        </div>
+      </details>
+
+      <details id="apiBox">
+        <summary>전체 회차 불러오기 (200개 넘는 목록)</summary>
+        <div class="inner">
+          <p class="hint">
+            유튜브 플레이어는 재생목록을 200개 정도까지만 넘겨줌. 유튜브 Data
+            API 키를 넣으면 재생목록 전체를 제목까지 한 번에 받아옴. 키는 이
+            기기에만 저장됨.
+          </p>
+          <div class="row">
+            <label for="apiKey"
+              >API 키
+              <input
+                id="apiKey"
+                type="text"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                placeholder="AIza..."
+              />
+            </label>
+            <button id="saveKey">저장</button>
+          </div>
+          <p class="hint" id="keyState"></p>
+        </div>
+      </details>
+
+      <details id="account">
+        <summary>유튜브 계정</summary>
+        <div class="inner">
+          <p class="hint" id="modeHint"></p>
+          <div class="row">
+            <a
+              class="btn primary"
+              id="login"
+              href="https://accounts.google.com/ServiceLogin?service=youtube&amp;continue=https%3A%2F%2Fwww.youtube.com%2F"
+              >1. 유튜브 로그인</a
+            >
+            <button id="reconnect">2. 플레이어 다시 연결</button>
+          </div>
+          <p class="hint">
+            로그인 화면에서 프리미엄 계정으로 로그인한 뒤, 위쪽의 「완료」나 ✕를
+            눌러 앱으로 돌아와 2번을 누르세요. 영상이 시작될 때 광고가 안 나오면
+            성공임.
           </p>
         </div>
       </details>
@@ -335,40 +463,83 @@
     </div>
 
     <script>
-      const KEY = "yt-continue-v2";
+      // ▼ 여기에 유튜브 Data API 키를 붙여넣기 (구글 클라우드에서 '웹사이트 제한'과 'API 제한'을 꼭 걸어 둘 것)
+      const BUILT_IN_API_KEY = "";
+
+      const KEY = "yt-continue-v3";
       const $ = (id) => document.getElementById(id);
-      let S = {
-        ids: [],
-        index: 0,
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      // 저장 구조: 여러 재생목록을 각자 진행 위치와 함께 보관
+      let L = {
+        current: null,
+        lists: {},
+        order: [],
         credit: 15,
-        over: {},
-        titles: {},
-        src: "",
-        list: null,
-        native: false,
+        creditSetByUser: false,
+        apiKey: "",
       };
       try {
         const s = JSON.parse(localStorage.getItem(KEY));
-        if (s && typeof s === "object") S = Object.assign(S, s);
+        if (s && typeof s === "object" && s.lists) L = Object.assign(L, s);
       } catch (e) {}
-      S.over = S.over || {};
-      S.titles = S.titles || {};
+      // 예전 버전(v2) 저장분 옮기기
+      try {
+        const o = JSON.parse(localStorage.getItem("yt-continue-v2"));
+        if (
+          o &&
+          !Object.keys(L.lists).length &&
+          (o.list || (o.ids && o.ids.length))
+        ) {
+          const k = o.list || "v:" + o.ids[0];
+          L.lists[k] = {
+            name: "",
+            src: o.src || "",
+            list: o.list || null,
+            native: !!o.native,
+            ids: o.ids || [],
+            titles: o.titles || {},
+            over: o.over || {},
+            index: o.index || 0,
+            base: 0,
+            total: 0,
+            fullTotal: 0,
+          };
+          L.order = [k];
+          L.current = k;
+          L.credit = o.credit ?? 15;
+        }
+      } catch (e) {}
       const save = () => {
         try {
-          localStorage.setItem(KEY, JSON.stringify(S));
+          localStorage.setItem(KEY, JSON.stringify(L));
         } catch (e) {}
       };
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const cur = () => (L.current ? L.lists[L.current] : null);
+      const apiKey = () => (L.apiKey || BUILT_IN_API_KEY || "").trim();
 
       let apiReady = false,
         scriptFailed = false,
         player = null,
         ready = false,
-        skippedFor = null,
-        total = 0;
-      const has = () => (S.native ? !!S.list : S.ids.length > 0);
-      const count = () => (S.native ? total : S.ids.length);
-      const key = () => (S.native ? "n" + S.index : S.ids[S.index]);
+        skippedFor = null;
+      let jumpTarget = null; // 200개 구간을 넘어 다시 불러올 때 목표 회차
+
+      const has = () => {
+        const c = cur();
+        return !!c && (c.native ? !!c.list : c.ids.length > 0);
+      };
+      function count() {
+        const c = cur();
+        if (!c) return 0;
+        if (!c.native) return c.ids.length;
+        return Math.max(c.fullTotal || 0, (c.base || 0) + (c.total || 0));
+      }
+      const key = (i) => {
+        const c = cur();
+        const j = i ?? c.index;
+        return c.native ? "n" + j : c.ids[j];
+      };
 
       function parse(text) {
         const ids = [];
@@ -392,39 +563,113 @@
         el.textContent = msg || "";
         el.className = "status" + (ok ? " ok" : "");
       }
+      function nameOf(c, k) {
+        return (
+          c.name ||
+          (c.titles && c.titles[c.native ? "n0" : c.ids[0]]) ||
+          (c.list ? `재생목록 ${c.list.slice(-6)}` : `영상 ${c.ids.length}개`)
+        );
+      }
 
       function render() {
-        const n = count(),
+        const c = cur(),
           on = has(),
-          k = key();
+          n = count();
         $("empty").hidden = on;
-        $("ep").textContent = on ? `${S.index + 1}화 / ${n || "?"}` : "— / —";
+        const windowFull = c && c.native && !c.fullTotal && c.total >= 200;
+        $("ep").textContent = on
+          ? `${c.index + 1}화 / ${n ? n + (windowFull ? "+" : "") : "?"}`
+          : "— / —";
         $("ttl").textContent = on
-          ? S.titles[k] || "재생 버튼을 누르면 시작"
+          ? c.titles[key()] || "재생 버튼을 누르면 시작"
           : "불러온 목록 없음";
-        $("prev").disabled = !on || S.index <= 0;
-        $("next").disabled = !on || (n > 0 && S.index >= n - 1);
+        $("prev").disabled = !on || c.index <= 0;
+        $("next").disabled = !on || (!windowFull && n > 0 && c.index >= n - 1);
         $("markCredit").disabled = !on;
+
         const ol = $("list");
         ol.innerHTML = "";
-        for (let i = 0; i < n; i++) {
-          const k2 = S.native ? "n" + i : S.ids[i];
-          const li = document.createElement("li"),
-            b = document.createElement("button");
-          b.setAttribute("aria-current", i === S.index ? "true" : "false");
-          const c = S.over[k2] != null ? `크레딧 ${S.over[k2]}초` : "";
-          b.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span><span class="c">${c}</span>`;
-          b.querySelector(".t").textContent =
-            S.titles[k2] || (S.native ? `${i + 1}화` : k2);
-          b.onclick = () => go(i);
-          li.appendChild(b);
-          ol.appendChild(li);
+        if (on)
+          for (let i = 0; i < n; i++) {
+            const k2 = key(i);
+            const li = document.createElement("li"),
+              b = document.createElement("button");
+            b.setAttribute("aria-current", i === c.index ? "true" : "false");
+            const cr = c.over[k2] != null ? `크레딧 ${c.over[k2]}초` : "";
+            b.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span><span class="c">${cr}</span>`;
+            b.querySelector(".t").textContent =
+              c.titles[k2] || (c.native ? `${i + 1}화` : k2);
+            b.onclick = () => go(i);
+            li.appendChild(b);
+            ol.appendChild(li);
+          }
+        renderLibs();
+      }
+
+      function renderLibs() {
+        const ul = $("libs");
+        ul.innerHTML = "";
+        $("libEmpty").hidden = L.order.length > 0;
+        for (const k of L.order) {
+          const c = L.lists[k];
+          if (!c) continue;
+          const li = document.createElement("li");
+          li.className = "lib";
+          li.setAttribute("aria-current", k === L.current ? "true" : "false");
+          const tot = c.native
+            ? c.fullTotal || (c.base || 0) + (c.total || 0) || "?"
+            : c.ids.length;
+          li.innerHTML = `<div class="meta"><div class="name"></div><div class="prog"></div></div>`;
+          li.querySelector(".name").textContent = nameOf(c);
+          li.querySelector(".prog").textContent =
+            `${c.index + 1}화 / ${tot}${c.list && !c.native ? " · 전체 회차" : ""}`;
+          const play = document.createElement("button");
+          play.textContent = k === L.current ? "보는 중" : "이어보기";
+          play.className = k === L.current ? "" : "primary";
+          play.disabled = k === L.current;
+          play.onclick = () => switchTo(k);
+          const del = document.createElement("button");
+          del.className = "del";
+          del.textContent = "삭제";
+          del.onclick = () => {
+            if (!del.classList.contains("armed")) {
+              del.classList.add("armed");
+              del.textContent = "정말 삭제";
+              setTimeout(() => {
+                del.classList.remove("armed");
+                del.textContent = "삭제";
+              }, 3000);
+              return;
+            }
+            delete L.lists[k];
+            L.order = L.order.filter((x) => x !== k);
+            if (L.current === k) {
+              L.current = L.order[0] || null;
+              save();
+              if (has()) createPlayer();
+              else {
+                destroyPlayer();
+              }
+            }
+            save();
+            render();
+          };
+          li.append(play, del);
+          ul.appendChild(li);
         }
       }
 
-      // 플레이어는 볼 영상(재생목록)이 정해진 뒤에 만든다
-      function createPlayer() {
-        if (!apiReady || !has()) return;
+      function switchTo(k) {
+        L.current = k;
+        L.order = [k, ...L.order.filter((x) => x !== k)];
+        save();
+        skippedFor = null;
+        render();
+        $("libBox").open = false;
+        if (apiReady) createPlayer();
+      }
+
+      function destroyPlayer() {
         if (player) {
           try {
             player.destroy();
@@ -432,12 +677,18 @@
           player = null;
         }
         ready = false;
-        const stage = document.querySelector(".stage");
         const old = $("player");
         if (old) old.remove();
         const div = document.createElement("div");
         div.id = "player";
-        stage.prepend(div);
+        document.querySelector(".stage").prepend(div);
+      }
+
+      // 플레이어는 볼 목록이 정해진 뒤에 만든다
+      function createPlayer() {
+        if (!apiReady || !has()) return;
+        destroyPlayer();
+        const c = cur();
         const vars = { playsinline: 1, rel: 0, modestbranding: 1 };
         if (location.origin && location.origin.startsWith("http"))
           vars.origin = location.origin;
@@ -447,18 +698,21 @@
           playerVars: vars,
           events: { onReady, onStateChange, onError },
         };
-        if (S.native) {
+        if (c.native) {
           vars.listType = "playlist";
-          vars.list = S.list;
-          vars.index = S.index;
-        } else opts.videoId = S.ids[S.index];
+          vars.list = c.list;
+          vars.index = c.index;
+          jumpTarget = c.index;
+          c.base = null;
+        } else opts.videoId = c.ids[c.index];
         status("플레이어 여는 중…");
         player = new YT.Player("player", opts);
+        const me = player;
         setTimeout(() => {
-          if (!ready)
+          if (player === me && !ready)
             status(
               document.querySelector(".stage iframe")
-                ? "플레이어 화면은 생겼지만 응답이 없음. 사파리 설정 > 확장 프로그램(콘텐츠 차단기)을 끄고 새로고침해 보세요."
+                ? "플레이어 화면은 생겼지만 응답이 없음. 사파리 콘텐츠 차단기를 끄고 새로고침해 보세요."
                 : "플레이어를 만들지 못했음. 페이지를 새로고침해 보세요.",
             );
         }, 10000);
@@ -466,39 +720,76 @@
 
       function onReady() {
         ready = true;
-        status(
-          S.native
-            ? "재생목록 연결됨. 영상의 재생 버튼을 누르면 시작"
-            : "준비됨. 영상의 재생 버튼을 누르면 시작",
-          true,
-        );
-        if (S.native) pollTotal();
+        status("준비됨. 영상의 재생 버튼을 누르면 시작", true);
+        if (cur() && cur().native) syncWindow();
         render();
       }
 
-      function onStateChange(e) {
-        if (S.native) {
-          const i = player.getPlaylistIndex();
-          if (typeof i === "number" && i >= 0 && i !== S.index) {
-            S.index = i;
-            skippedFor = null;
+      // 플레이어가 가진 구간(최대 약 200개)과 실제 회차 번호를 맞춤
+      async function syncWindow() {
+        for (let i = 0; i < 40; i++) {
+          const c = cur();
+          if (!c || !c.native || !player) return;
+          let ids = null,
+            r = -1;
+          try {
+            ids = player.getPlaylist();
+            r = player.getPlaylistIndex();
+          } catch (e) {}
+          if (ids && ids.length && r >= 0) {
+            if (c.base == null)
+              c.base = Math.max(0, (jumpTarget ?? c.index) - r);
+            c.total = ids.length;
+            c.index = c.base + r;
+            jumpTarget = null;
             save();
             render();
+            return;
+          }
+          await sleep(400);
+        }
+      }
+
+      function onStateChange(e) {
+        const c = cur();
+        if (!c) return;
+        if (c.native) {
+          let r = -1;
+          try {
+            r = player.getPlaylistIndex();
+          } catch (x) {}
+          if (r >= 0) {
+            if (c.base == null) {
+              syncWindow();
+            } else if (c.base + r !== c.index) {
+              c.index = c.base + r;
+              skippedFor = null;
+              save();
+              render();
+            }
           }
         }
         if (e.data === YT.PlayerState.PLAYING) {
           const d = player.getVideoData(),
             k = key();
-          if (d && d.title && k && S.titles[k] !== d.title) {
-            S.titles[k] = d.title;
+          if (d && d.title && k && c.titles[k] !== d.title) {
+            c.titles[k] = d.title;
             save();
             render();
           }
         }
-        if (e.data === YT.PlayerState.ENDED && !S.native) next();
+        if (e.data === YT.PlayerState.ENDED) {
+          if (!c.native) next();
+          else {
+            const ids = player.getPlaylist() || [];
+            const r = player.getPlaylistIndex();
+            if (r >= ids.length - 1) next();
+          }
+        }
       }
 
       function onError(e) {
+        const c = cur();
         const msg =
           {
             2: "잘못된 영상 주소",
@@ -509,24 +800,9 @@
             153: "페이지 주소 정보가 없어 재생이 막힘. 웹에 올린 주소로 열어야 함",
           }[e.data] || `오류 ${e.data}`;
         status(
-          `${S.index + 1}화: ${msg}${e.data !== 153 ? ". 다음 화로 넘어감" : ""}`,
+          `${c ? c.index + 1 : ""}화: ${msg}${e.data !== 153 ? ". 다음 화로 넘어감" : ""}`,
         );
         if (e.data !== 153) setTimeout(next, 1500);
-      }
-
-      async function pollTotal() {
-        for (let i = 0; i < 40; i++) {
-          await sleep(500);
-          let ids = null;
-          try {
-            ids = player.getPlaylist();
-          } catch (e) {}
-          if (ids && ids.length) {
-            total = ids.length;
-            render();
-            return;
-          }
-        }
       }
 
       function onYouTubeIframeAPIReady() {
@@ -534,32 +810,60 @@
         if (has()) createPlayer();
       }
 
-      function go(i) {
-        if (!has() || i < 0) return;
-        const n = count();
-        if (n && i >= n) return;
-        S.index = i;
+      function jumpTo(i) {
+        const c = cur();
+        c.index = i;
+        c.base = null;
+        jumpTarget = i;
         skippedFor = null;
         save();
         render();
-        if (!ready) return;
-        if (S.native) player.playVideoAt(i);
-        else player.loadVideoById(S.ids[i]);
+        status(`${i + 1}화 구간 불러오는 중…`);
+        player.loadPlaylist({ list: c.list, listType: "playlist", index: i });
+        setTimeout(syncWindow, 800);
+      }
+
+      function go(i) {
+        const c = cur();
+        if (!has() || i < 0) return;
+        const n = count();
+        const windowFull = c.native && !c.fullTotal && c.total >= 200;
+        if (n && i >= n && !windowFull) return;
+        skippedFor = null;
+        if (!ready) {
+          c.index = i;
+          save();
+          render();
+          return;
+        }
+        if (c.native) {
+          const r = i - (c.base || 0);
+          if (c.base != null && r >= 0 && r < (c.total || 0)) {
+            c.index = i;
+            save();
+            render();
+            player.playVideoAt(r);
+          } else jumpTo(i);
+        } else {
+          c.index = i;
+          save();
+          render();
+          player.loadVideoById(c.ids[i]);
+        }
       }
 
       function next() {
+        const c = cur();
+        if (!c) return;
         const n = count();
-        if (n && S.index >= n - 1) {
+        const windowFull = c.native && !c.fullTotal && c.total >= 200;
+        if (!windowFull && n && c.index >= n - 1) {
           status("마지막 화까지 봤음");
           player && player.pauseVideo();
           return;
         }
-        if (S.native && ready) {
-          skippedFor = key();
-          player.nextVideo();
-          return;
-        }
-        go(S.index + 1);
+        skippedFor = key();
+        go(c.index + 1);
       }
 
       setTimeout(() => {
@@ -572,32 +876,80 @@
       }, 8000);
 
       setInterval(() => {
-        if (!ready || !has()) return;
-        if (player.getPlayerState() !== YT.PlayerState.PLAYING) return;
-        const k = key();
+        if (!ready || !has() || !player) return;
+        let st;
+        try {
+          st = player.getPlayerState();
+        } catch (e) {
+          return;
+        }
+        if (st !== YT.PlayerState.PLAYING) return;
+        const c = cur(),
+          k = key();
         if (skippedFor === k) return;
         const d = player.getDuration(),
           t = player.getCurrentTime();
-        const credit = S.over[k] != null ? S.over[k] : S.credit;
+        const credit = c.over[k] != null ? c.over[k] : L.credit;
         if (d > 0 && credit > 0 && d - credit > 5 && t >= d - credit) {
           skippedFor = k;
-          status(`${S.index + 1}화 크레딧 건너뜀`, true);
+          status(`${c.index + 1}화 크레딧 건너뜀`, true);
           next();
         }
       }, 400);
 
-      $("prev").onclick = () => go(S.index - 1);
+      // 유튜브 Data API로 재생목록 전체(200개 이상)를 받아옴
+      async function fetchAll(list, apiKey) {
+        const base = "https://www.googleapis.com/youtube/v3/";
+        const ids = [],
+          titles = {};
+        let token = "",
+          name = "";
+        try {
+          const r = await fetch(
+            `${base}playlists?part=snippet&id=${list}&key=${encodeURIComponent(apiKey)}`,
+          );
+          const j = await r.json();
+          if (j.items && j.items[0]) name = j.items[0].snippet.title;
+        } catch (e) {}
+        do {
+          const r = await fetch(
+            `${base}playlistItems?part=snippet,status&maxResults=50&playlistId=${list}&key=${encodeURIComponent(apiKey)}${token ? "&pageToken=" + token : ""}`,
+          );
+          const j = await r.json();
+          if (j.error) throw new Error(j.error.message || "API 오류");
+          for (const it of j.items || []) {
+            const s = it.snippet;
+            const vid = s && s.resourceId && s.resourceId.videoId;
+            if (
+              !vid ||
+              s.title === "Private video" ||
+              s.title === "Deleted video"
+            )
+              continue;
+            if (!ids.includes(vid)) {
+              ids.push(vid);
+              titles[vid] = s.title;
+            }
+          }
+          token = j.nextPageToken || "";
+          status(`전체 회차 받아오는 중… ${ids.length}개`);
+        } while (token && ids.length < 5000);
+        return { ids, titles, name };
+      }
+
+      $("prev").onclick = () => go(cur().index - 1);
       $("next").onclick = () => next();
       $("markCredit").onclick = () => {
         if (!ready || !has()) return;
-        const k = key(),
+        const c = cur(),
+          k = key(),
           d = player.getDuration(),
           t = player.getCurrentTime();
         if (!(d > 0)) return;
         const sec = Math.max(1, Math.round(d - t));
-        S.over[k] = sec;
-        if (!S.creditSetByUser) {
-          S.credit = sec;
+        c.over[k] = sec;
+        if (!L.creditSetByUser) {
+          L.credit = sec;
           $("credit").value = sec;
         }
         save();
@@ -605,41 +957,142 @@
         next();
       };
       $("credit").onchange = (e) => {
-        S.credit = Math.max(0, Math.round(+e.target.value || 0));
-        S.creditSetByUser = true;
+        L.credit = Math.max(0, Math.round(+e.target.value || 0));
+        L.creditSetByUser = true;
         save();
       };
-      $("load").onclick = () => {
+
+      $("load").onclick = async () => {
         const text = $("src").value;
         const { list, ids } = parse(text);
         if (!list && !ids.length) {
           status("링크에서 영상이나 재생목록을 찾지 못했음");
           return;
         }
-        S.src = text;
-        S.index = 0;
-        S.over = {};
-        S.titles = {};
-        total = 0;
-        if (list && ids.length <= 1) {
-          S.native = true;
-          S.list = list;
-          S.ids = [];
+        const isList = list && ids.length <= 1;
+        const k = isList ? list : "v:" + ids.join(",").slice(0, 60);
+        const old = L.lists[k];
+        let c = old || {
+          name: "",
+          src: text,
+          list: null,
+          native: false,
+          ids: [],
+          titles: {},
+          over: {},
+          index: 0,
+          base: 0,
+          total: 0,
+          fullTotal: 0,
+        };
+        c.src = text;
+        if (isList) {
+          c.list = list;
+          if (apiKey()) {
+            $("load").disabled = true;
+            try {
+              const res = await fetchAll(list, apiKey());
+              if (res.ids.length) {
+                const prevId = !c.native && c.ids[c.index];
+                const prevIdx = c.index;
+                c.native = false;
+                c.ids = res.ids;
+                c.titles = Object.assign(c.titles || {}, res.titles);
+                c.fullTotal = res.ids.length;
+                if (res.name) c.name = res.name;
+                const found = prevId ? res.ids.indexOf(prevId) : -1;
+                c.index =
+                  found >= 0
+                    ? found
+                    : Math.min(prevIdx || 0, res.ids.length - 1);
+                status(`전체 ${res.ids.length}개 불러옴`, true);
+              } else throw new Error("재생목록이 비어 있음");
+            } catch (e) {
+              status(`API로 못 받음(${e.message}). 플레이어 방식으로 엶`);
+              c.native = true;
+            }
+            $("load").disabled = false;
+          } else if (!old) {
+            c.native = true;
+          }
         } else {
-          S.native = false;
-          S.list = null;
-          S.ids = ids;
+          c.native = false;
+          c.list = null;
+          c.ids = ids;
+          c.index = old ? Math.min(old.index, ids.length - 1) : 0;
         }
+        L.lists[k] = c;
+        L.current = k;
+        L.order = [k, ...L.order.filter((x) => x !== k)];
         save();
         render();
         $("setup").open = false;
+        if (old) status(`저장된 목록이라 ${c.index + 1}화부터 이어봄`, true);
         if (apiReady) createPlayer();
         else status("유튜브 스크립트 기다리는 중…");
       };
 
-      $("src").value = S.src || "";
-      $("credit").value = S.credit;
+      $("saveKey").onclick = () => {
+        L.apiKey = $("apiKey").value.trim();
+        save();
+        keyState();
+        status(
+          L.apiKey
+            ? "API 키 저장됨. 재생목록을 다시 불러오면 전체가 들어옴"
+            : "API 키 지움",
+          true,
+        );
+      };
+      function keyState() {
+        $("apiBox").hidden = !!BUILT_IN_API_KEY && !L.apiKey;
+        $("keyState").textContent = apiKey()
+          ? "키 저장됨. 「새 목록 추가」에서 재생목록을 다시 불러오면 전체 회차가 들어옴(보던 위치 유지)."
+          : "키 없음. 지금은 200개 구간이 끝나면 다음 구간을 다시 불러오는 방식으로 넘어감.";
+      }
+
+      const standalone =
+        window.navigator.standalone === true ||
+        (window.matchMedia && matchMedia("(display-mode: standalone)").matches);
+      $("modeHint").textContent = standalone
+        ? "홈 화면 앱으로 열려 있음. 이 앱은 사파리와 로그인이 따로라서 여기서 한 번 로그인해야 함."
+        : "사파리 탭으로 열려 있음. 사파리에서 유튜브에 로그인돼 있으면 보통 따로 할 필요 없음.";
+      $("reconnect").onclick = () => {
+        if (!has()) {
+          status("먼저 목록을 불러와 주세요");
+          return;
+        }
+        if (!apiReady) {
+          status("유튜브 스크립트 기다리는 중…");
+          return;
+        }
+        createPlayer();
+      };
+
+      $("apiKey").value = L.apiKey || "";
+      $("credit").value = L.credit;
+      keyState();
       if (!has()) $("setup").open = true;
+      (async () => {
+        const c = cur();
+        if (!apiKey() || !c || !c.list || !c.native) return;
+        try {
+          const res = await fetchAll(c.list, apiKey());
+          if (!res.ids.length) return;
+          c.native = false;
+          c.ids = res.ids;
+          c.titles = Object.assign(c.titles || {}, res.titles);
+          c.fullTotal = res.ids.length;
+          if (res.name) c.name = res.name;
+          c.index = Math.min(c.index || 0, res.ids.length - 1);
+          save();
+          render();
+          status(`전체 ${res.ids.length}개 불러옴`, true);
+          if (apiReady) createPlayer();
+        } catch (e) {
+          status(`전체 회차를 못 받음(${e.message})`);
+        }
+      })();
+      if (L.order.length > 1) $("libBox").open = true;
       render();
     </script>
     <script
