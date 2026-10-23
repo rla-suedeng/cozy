@@ -510,6 +510,14 @@
           L.credit = o.credit ?? 15;
         }
       } catch (e) {}
+      for (const k in L.lists) {
+        const c = L.lists[k];
+        if (c && c.native && !c.fixed200) {
+          if (c.index >= 200 && !c.curId) c.index = 199;
+          c.base = 0;
+          c.fixed200 = true;
+        }
+      }
       const save = () => {
         try {
           localStorage.setItem(KEY, JSON.stringify(L));
@@ -523,7 +531,6 @@
         player = null,
         ready = false,
         skippedFor = null;
-      let jumpTarget = null; // 200개 구간을 넘어 다시 불러올 때 목표 회차
 
       const has = () => {
         const c = cur();
@@ -685,7 +692,9 @@
       }
 
       // 플레이어는 볼 목록이 정해진 뒤에 만든다
-      function createPlayer() {
+      // 재생목록 방식에서는 '기준 영상(anchor)'으로 플레이어를 열어 200개 구간 밖으로도 이동함
+      let pend = null; // { anchor: 영상ID|null, anchorAbs: 기준 영상의 실제 회차, target: 이동할 회차 }
+      function createPlayer(anchorOverride) {
         if (!apiReady || !has()) return;
         destroyPlayer();
         const c = cur();
@@ -701,11 +710,20 @@
         if (c.native) {
           vars.listType = "playlist";
           vars.list = c.list;
-          vars.index = c.index;
-          jumpTarget = c.index;
+          pend = anchorOverride || {
+            anchor: c.curId || null,
+            anchorAbs: c.index,
+            target: c.index,
+          };
+          if (pend.anchor) opts.videoId = pend.anchor;
+          else {
+            vars.index = Math.min(c.index, 199);
+            pend.anchorAbs = vars.index;
+            pend.target = vars.index;
+          }
           c.base = null;
         } else opts.videoId = c.ids[c.index];
-        status("플레이어 여는 중…");
+        status(anchorOverride ? "다음 구간 불러오는 중…" : "플레이어 여는 중…");
         player = new YT.Player("player", opts);
         const me = player;
         setTimeout(() => {
@@ -720,70 +738,98 @@
 
       function onReady() {
         ready = true;
-        status("준비됨. 영상의 재생 버튼을 누르면 시작", true);
-        if (cur() && cur().native) syncWindow();
+        const c = cur();
+        if (c && c.native) syncWindow();
+        else status("준비됨. 영상의 재생 버튼을 누르면 시작", true);
         render();
       }
 
-      // 플레이어가 가진 구간(최대 약 200개)과 실제 회차 번호를 맞춤
+      function extendFail(abs) {
+        const c = cur();
+        pend = null;
+        c.index = abs;
+        save();
+        render();
+        try {
+          player.pauseVideo();
+        } catch (e) {}
+        status(
+          `${abs + 2}화부터는 플레이어가 목록을 안 넘겨줌. API 키를 넣으면 전체 회차를 이어볼 수 있음`,
+        );
+      }
+
+      // 플레이어가 가진 구간(최대 약 200개)에서 기준 영상의 위치를 찾아 실제 회차 번호를 맞춤
       async function syncWindow() {
         for (let i = 0; i < 40; i++) {
           const c = cur();
-          if (!c || !c.native || !player) return;
+          if (!c || !c.native || !player || !pend) return;
           let ids = null,
             r = -1;
           try {
             ids = player.getPlaylist();
             r = player.getPlaylistIndex();
           } catch (e) {}
-          if (ids && ids.length && r >= 0) {
-            if (c.base == null)
-              c.base = Math.max(0, (jumpTarget ?? c.index) - r);
+          if (ids && ids.length) {
+            const P = pend;
+            let p = P.anchor ? ids.indexOf(P.anchor) : r;
+            if (p < 0) {
+              if (P.target !== P.anchorAbs) return extendFail(P.anchorAbs);
+              p = 0;
+            }
+            c.base = P.anchorAbs - p;
+            c.win = ids;
             c.total = ids.length;
-            c.index = c.base + r;
-            jumpTarget = null;
+            const rt = P.target - c.base;
+            if (rt < 0 || rt >= ids.length) return extendFail(P.anchorAbs);
+            c.index = P.target;
+            pend = null;
+            skippedFor = null;
             save();
             render();
+            if (rt !== p) {
+              player.playVideoAt(rt);
+              status(`${c.index + 1}화 재생`, true);
+            } else status("준비됨. 영상의 재생 버튼을 누르면 시작", true);
             return;
           }
           await sleep(400);
         }
+        if (pend && pend.target !== pend.anchorAbs) extendFail(pend.anchorAbs);
       }
 
       function onStateChange(e) {
         const c = cur();
         if (!c) return;
-        if (c.native) {
+        if (c.native && !pend && c.base != null) {
           let r = -1;
           try {
             r = player.getPlaylistIndex();
           } catch (x) {}
-          if (r >= 0) {
-            if (c.base == null) {
-              syncWindow();
-            } else if (c.base + r !== c.index) {
-              c.index = c.base + r;
-              skippedFor = null;
-              save();
-              render();
-            }
+          if (r >= 0 && c.base + r !== c.index) {
+            c.index = c.base + r;
+            skippedFor = null;
+            save();
+            render();
           }
         }
-        if (e.data === YT.PlayerState.PLAYING) {
+        if (e.data === YT.PlayerState.PLAYING && !pend) {
           const d = player.getVideoData(),
             k = key();
+          if (d && d.video_id && c.native && c.curId !== d.video_id) {
+            c.curId = d.video_id;
+            save();
+          }
           if (d && d.title && k && c.titles[k] !== d.title) {
             c.titles[k] = d.title;
             save();
             render();
           }
         }
-        if (e.data === YT.PlayerState.ENDED) {
+        if (e.data === YT.PlayerState.ENDED && !pend) {
           if (!c.native) next();
           else {
-            const ids = player.getPlaylist() || [];
             const r = player.getPlaylistIndex();
-            if (r >= ids.length - 1) next();
+            if (r >= (c.total || 0) - 1) next();
           }
         }
       }
@@ -810,22 +856,9 @@
         if (has()) createPlayer();
       }
 
-      function jumpTo(i) {
-        const c = cur();
-        c.index = i;
-        c.base = null;
-        jumpTarget = i;
-        skippedFor = null;
-        save();
-        render();
-        status(`${i + 1}화 구간 불러오는 중…`);
-        player.loadPlaylist({ list: c.list, listType: "playlist", index: i });
-        setTimeout(syncWindow, 800);
-      }
-
       function go(i) {
         const c = cur();
-        if (!has() || i < 0) return;
+        if (!has() || i < 0 || pend) return;
         const n = count();
         const windowFull = c.native && !c.fullTotal && c.total >= 200;
         if (n && i >= n && !windowFull) return;
@@ -843,7 +876,18 @@
             save();
             render();
             player.playVideoAt(r);
-          } else jumpTo(i);
+            return;
+          }
+          // 구간 밖: 구간 끝(또는 처음) 영상을 기준으로 플레이어를 다시 열어 다음 구간을 받음
+          const win = c.win || [];
+          if (!win.length || c.base == null) return;
+          const fwd = i >= c.base + win.length;
+          const anchorAbs = fwd ? c.base + win.length - 1 : c.base;
+          createPlayer({
+            anchor: win[fwd ? win.length - 1 : 0],
+            anchorAbs,
+            target: i,
+          });
         } else {
           c.index = i;
           save();
@@ -854,7 +898,7 @@
 
       function next() {
         const c = cur();
-        if (!c) return;
+        if (!c || pend) return;
         const n = count();
         const windowFull = c.native && !c.fullTotal && c.total >= 200;
         if (!windowFull && n && c.index >= n - 1) {
