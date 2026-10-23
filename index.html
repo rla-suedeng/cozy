@@ -39,6 +39,9 @@
       * {
         box-sizing: border-box;
       }
+      [hidden] {
+        display: none !important;
+      }
       html,
       body {
         margin: 0;
@@ -334,21 +337,37 @@
     <script>
       const KEY = "yt-continue-v1";
       const $ = (id) => document.getElementById(id);
-      let S = { ids: [], index: 0, credit: 15, over: {}, titles: {}, src: "" };
+      let S = {
+        ids: [],
+        index: 0,
+        credit: 15,
+        over: {},
+        titles: {},
+        src: "",
+        list: null,
+        native: false,
+      };
       try {
         const s = JSON.parse(localStorage.getItem(KEY));
-        if (s && Array.isArray(s.ids)) S = Object.assign(S, s);
+        if (s && typeof s === "object") S = Object.assign(S, s);
       } catch (e) {}
+      S.over = S.over || {};
+      S.titles = S.titles || {};
       const save = () => {
         try {
           localStorage.setItem(KEY, JSON.stringify(S));
         } catch (e) {}
       };
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
       let player = null,
         ready = false,
-        pendingPlaylist = null,
-        skippedFor = null;
+        busy = false,
+        skippedFor = null,
+        nativeTotal = 0;
+      const has = () => (S.native ? !!S.list : S.ids.length > 0);
+      const total = () => (S.native ? nativeTotal : S.ids.length);
+      const key = () => (S.native ? "n" + S.index : S.ids[S.index]);
 
       function parse(text) {
         const ids = [];
@@ -374,48 +393,58 @@
       }
 
       function render() {
-        const n = S.ids.length,
-          id = S.ids[S.index];
-        $("empty").hidden = n > 0;
-        $("ep").textContent = n ? `${S.index + 1}화 / ${n}` : "— / —";
-        $("ttl").textContent = n
-          ? S.titles[id] || "불러오는 중…"
+        const n = total(),
+          on = has(),
+          k = key();
+        $("empty").hidden = on || busy;
+        $("ep").textContent = on ? `${S.index + 1}화 / ${n || "?"}` : "— / —";
+        $("ttl").textContent = on
+          ? S.titles[k] || "재생을 누르면 시작"
           : "불러온 목록 없음";
-        $("prev").disabled = !n || S.index <= 0;
-        $("next").disabled = !n || S.index >= n - 1;
-        $("markCredit").disabled = !n;
+        $("prev").disabled = !on || S.index <= 0;
+        $("next").disabled = !on || (n > 0 && S.index >= n - 1);
+        $("markCredit").disabled = !on;
         const ol = $("list");
         ol.innerHTML = "";
-        S.ids.forEach((vid, i) => {
+        const count = S.native ? nativeTotal : S.ids.length;
+        for (let i = 0; i < count; i++) {
+          const k2 = S.native ? "n" + i : S.ids[i];
           const li = document.createElement("li"),
             b = document.createElement("button");
           b.setAttribute("aria-current", i === S.index ? "true" : "false");
-          const c = S.over[vid] != null ? `크레딧 ${S.over[vid]}초` : "";
+          const c = S.over[k2] != null ? `크레딧 ${S.over[k2]}초` : "";
           b.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span><span class="c">${c}</span>`;
-          b.querySelector(".t").textContent = S.titles[vid] || vid;
+          b.querySelector(".t").textContent =
+            S.titles[k2] || (S.native ? `${i + 1}화` : k2);
           b.onclick = () => go(i);
           li.appendChild(b);
           ol.appendChild(li);
-        });
+        }
       }
 
-      function go(i, autoplay = true) {
-        if (!S.ids.length) return;
-        if (i < 0 || i >= S.ids.length) return;
+      function go(i) {
+        if (!has() || i < 0) return;
+        const n = total();
+        if (n && i >= n) return;
         S.index = i;
         skippedFor = null;
         save();
         render();
-        if (ready)
-          autoplay
-            ? player.loadVideoById(S.ids[i])
-            : player.cueVideoById(S.ids[i]);
+        if (!ready) return;
+        if (S.native) player.playVideoAt(i);
+        else player.loadVideoById(S.ids[i]);
       }
 
       function next() {
-        if (S.index >= S.ids.length - 1) {
+        const n = total();
+        if (n && S.index >= n - 1) {
           status("마지막 화까지 봤음");
           player && player.pauseVideo();
+          return;
+        }
+        if (S.native && ready) {
+          skippedFor = key();
+          player.nextVideo();
           return;
         }
         go(S.index + 1);
@@ -428,49 +457,82 @@
         player = new YT.Player("player", {
           width: "100%",
           height: "100%",
-          videoId: S.ids[S.index] || undefined,
+          videoId: (!S.native && S.ids[S.index]) || undefined,
           playerVars: vars,
           events: {
             onReady: () => {
               ready = true;
-              if (pendingPlaylist) startPlaylist(pendingPlaylist);
+              status("");
+              if (S.native && S.list) {
+                player.cuePlaylist({
+                  list: S.list,
+                  listType: "playlist",
+                  index: S.index,
+                });
+                pollNativeTotal();
+              }
+              render();
             },
             onStateChange: (e) => {
-              if (pendingPlaylist) return;
-              if (e.data === YT.PlayerState.PLAYING) {
-                const d = player.getVideoData(),
-                  id = S.ids[S.index];
-                if (d && d.title && id && S.titles[id] !== d.title) {
-                  S.titles[id] = d.title;
+              if (busy) return;
+              if (S.native) {
+                const i = player.getPlaylistIndex();
+                if (typeof i === "number" && i >= 0 && i !== S.index) {
+                  S.index = i;
+                  skippedFor = null;
                   save();
-                  render();
                 }
               }
-              if (e.data === YT.PlayerState.ENDED) next();
+              if (e.data === YT.PlayerState.PLAYING) {
+                const d = player.getVideoData(),
+                  k = key();
+                if (d && d.title && k && S.titles[k] !== d.title) {
+                  S.titles[k] = d.title;
+                  save();
+                }
+                render();
+              }
+              if (e.data === YT.PlayerState.ENDED && !S.native) next();
             },
             onError: (e) => {
+              if (busy) return;
               const msg =
                 {
                   2: "잘못된 영상 주소",
                   5: "재생 불가 영상",
                   100: "삭제됐거나 비공개 영상",
-                  101: "퍼가기가 막힌 영상",
-                  150: "퍼가기가 막힌 영상",
+                  101: "외부 재생이 막힌 영상",
+                  150: "외부 재생이 막힌 영상",
                   153: "페이지 주소 정보가 없어 재생이 막힘. 웹에 올린 주소로 열어야 함",
                 }[e.data] || `오류 ${e.data}`;
-              status(`${S.index + 1}화: ${msg}. 다음 화로 넘어감`);
+              status(
+                `${S.index + 1}화: ${msg}${e.data !== 153 ? ". 다음 화로 넘어감" : ""}`,
+              );
               if (e.data !== 153) setTimeout(next, 1500);
             },
           },
         });
       }
 
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      async function pollNativeTotal() {
+        for (let i = 0; i < 30; i++) {
+          await sleep(500);
+          let ids = null;
+          try {
+            ids = player.getPlaylist();
+          } catch (e) {}
+          if (ids && ids.length) {
+            nativeTotal = ids.length;
+            render();
+            return;
+          }
+        }
+      }
 
-      // 재생목록을 큐에 올린 뒤 getPlaylist()가 채워질 때까지 직접 확인
-      async function fetchBatch(list, index, prev) {
+      // 재생목록 영상 목록을 받아보고, 안 되면 플레이어 자체 재생목록 기능으로 전환
+      async function getIds(list, index, prev, waitMs) {
         player.cuePlaylist({ list, listType: "playlist", index });
-        for (let i = 0; i < 40; i++) {
+        for (let t = 0; t < waitMs; t += 300) {
           await sleep(300);
           let ids = null;
           try {
@@ -479,51 +541,78 @@
           if (ids && ids.length && (!prev || ids.join() !== prev.join()))
             return ids;
         }
-        return prev && index > 0 ? prev : null;
+        return null;
       }
 
-      let loading = false;
-      async function startPlaylist(list) {
-        pendingPlaylist = list;
-        $("empty").hidden = true;
+      async function loadPlaylist(list) {
         if (!ready) {
-          status("유튜브 플레이어 준비 중…");
-          return;
-        }
-        if (loading) return;
-        loading = true;
-        status("재생목록 불러오는 중…");
-        const all = [];
-        let prev = null;
-        // 임베드 플레이어는 한 번에 일부(약 200개)만 줄 수 있어서 뒷부분을 나눠서 이어 붙임
-        for (let round = 0; round < 6; round++) {
-          const batch = await fetchBatch(list, all.length, prev);
-          if (!batch) break;
-          const before = all.length;
-          for (const id of batch) if (!all.includes(id)) all.push(id);
-          status(`재생목록 불러오는 중… ${all.length}개`);
-          if (all.length === before || batch.length < 200) break;
-          prev = batch;
-        }
-        loading = false;
-        pendingPlaylist = null;
-        if (!all.length) {
           status(
-            "재생목록을 못 불러옴. 비공개이거나 외부 재생이 막혔을 수 있음. 영상 링크를 한 줄에 하나씩 넣어 보세요.",
+            "유튜브 플레이어가 아직 준비 안 됨. 몇 초 뒤 다시 눌러 주세요.",
           );
-          render();
           return;
         }
-        S.ids = all;
+        if (busy) return;
+        busy = true;
+        render();
+        const t0 = Date.now();
+        const tick = setInterval(
+          () =>
+            status(
+              `재생목록 불러오는 중… ${Math.round((Date.now() - t0) / 1000)}초`,
+            ),
+          500,
+        );
+        let all = [];
+        try {
+          let prev = null;
+          for (let round = 0; round < 6; round++) {
+            const batch = await getIds(
+              list,
+              all.length,
+              prev,
+              round ? 6000 : 8000,
+            );
+            if (!batch) break;
+            const before = all.length;
+            for (const id of batch) if (!all.includes(id)) all.push(id);
+            if (all.length === before || batch.length < 200) break;
+            prev = batch;
+          }
+        } catch (e) {
+          all = [];
+        }
+        clearInterval(tick);
+        busy = false;
         S.index = 0;
         S.over = {};
-        save();
-        render();
-        player.cueVideoById(all[0]);
-        status(`${all.length}개 영상 불러옴. 재생 버튼을 누르면 시작`, true);
+        skippedFor = null;
+        if (all.length) {
+          S.native = false;
+          S.list = list;
+          S.ids = all;
+          save();
+          render();
+          player.cueVideoById(all[0]);
+          status(
+            `${all.length}개 영상 불러옴. 영상의 재생 버튼을 누르면 시작`,
+            true,
+          );
+        } else {
+          S.native = true;
+          S.list = list;
+          S.ids = [];
+          nativeTotal = 0;
+          save();
+          player.cuePlaylist({ list, listType: "playlist", index: 0 });
+          render();
+          pollNativeTotal();
+          status(
+            "목록은 못 받았지만 유튜브 재생목록 그대로 재생함. 영상의 재생 버튼을 누르면 시작",
+            true,
+          );
+        }
       }
 
-      // 10초 넘게 플레이어가 안 뜨면 알려줌
       setTimeout(() => {
         if (!ready)
           status(
@@ -532,30 +621,30 @@
       }, 10000);
 
       setInterval(() => {
-        if (!ready || !S.ids.length || pendingPlaylist) return;
+        if (!ready || busy || !has()) return;
         if (player.getPlayerState() !== YT.PlayerState.PLAYING) return;
-        const id = S.ids[S.index];
-        if (skippedFor === id) return;
+        const k = key();
+        if (skippedFor === k) return;
         const d = player.getDuration(),
           t = player.getCurrentTime();
-        const credit = S.over[id] != null ? S.over[id] : S.credit;
+        const credit = S.over[k] != null ? S.over[k] : S.credit;
         if (d > 0 && credit > 0 && d - credit > 5 && t >= d - credit) {
-          skippedFor = id;
+          skippedFor = k;
           status(`${S.index + 1}화 크레딧 건너뜀`, true);
           next();
         }
       }, 400);
 
       $("prev").onclick = () => go(S.index - 1);
-      $("next").onclick = () => go(S.index + 1);
+      $("next").onclick = () => next();
       $("markCredit").onclick = () => {
-        if (!ready) return;
-        const id = S.ids[S.index],
+        if (!ready || !has()) return;
+        const k = key(),
           d = player.getDuration(),
           t = player.getCurrentTime();
         if (!(d > 0)) return;
         const sec = Math.max(1, Math.round(d - t));
-        S.over[id] = sec;
+        S.over[k] = sec;
         if (!S.creditSetByUser) {
           S.credit = sec;
           $("credit").value = sec;
@@ -565,8 +654,7 @@
         next();
       };
       $("credit").onchange = (e) => {
-        const v = Math.max(0, Math.round(+e.target.value || 0));
-        S.credit = v;
+        S.credit = Math.max(0, Math.round(+e.target.value || 0));
         S.creditSetByUser = true;
         save();
       };
@@ -574,16 +662,16 @@
         const text = $("src").value;
         const { list, ids } = parse(text);
         S.src = text;
-        S.over = S.over || {};
         if (ids.length > 1 || (ids.length && !list)) {
+          S.native = false;
+          S.list = null;
           S.ids = ids;
           S.index = 0;
           save();
           go(0);
           status(`${ids.length}개 영상 불러옴`, true);
         } else if (list) {
-          status("재생목록 불러오는 중…");
-          startPlaylist(list);
+          loadPlaylist(list);
         } else {
           status("링크에서 영상이나 재생목록을 찾지 못했음");
           return;
@@ -593,7 +681,7 @@
 
       $("src").value = S.src || "";
       $("credit").value = S.credit;
-      if (!S.ids.length) $("setup").open = true;
+      if (!has()) $("setup").open = true;
       render();
     </script>
     <script src="https://www.youtube.com/iframe_api"></script>
