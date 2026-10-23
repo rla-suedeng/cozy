@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="이어보기">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>이어보기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=IBM+Plex+Sans+KR:wght@400;600&display=swap">
+<style>
+  /* 레이아웃: 위에 영상, 아래에 조작 막대와 접히는 설정/회차 목록 */
+  :root{
+    --bg:#16141a; --panel:#211e27; --line:#332f3b; --fg:#f3eef6; --muted:#a59bae;
+    --accent:#ffb3c7; --accent-ink:#2a1720; --ok:#9fe3c1;
+    --display:"Gowun Dodum", "Apple SD Gothic Neo", sans-serif;
+    --body:"IBM Plex Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);-webkit-text-size-adjust:100%}
+  body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+  .wrap{max-width:960px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px 32px;display:flex;flex-direction:column;gap:14px}
+  .stage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:14px;overflow:hidden}
+  .stage iframe,#player{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);padding:20px}
+  .bar{display:flex;align-items:center;gap:10px}
+  .now{flex:1;min-width:0}
+  .now .ep{font:600 12px var(--body);letter-spacing:.06em;color:var(--accent)}
+  .now .ttl{font:18px/1.3 var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  button{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;cursor:pointer}
+  button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+  .round{width:46px;height:46px;padding:0;display:grid;place-items:center;font-size:18px}
+  .credit{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .credit button{flex:1 1 auto}
+  .status{font-size:13px;color:var(--muted);min-height:1.5em}
+  .status.ok{color:var(--ok)}
+  details{background:var(--panel);border:1px solid var(--line);border-radius:14px}
+  summary{padding:14px 16px;cursor:pointer;font-weight:600;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"＋";float:right;color:var(--muted)}
+  details[open] summary::after{content:"－"}
+  .inner{padding:0 16px 16px;display:flex;flex-direction:column;gap:12px}
+  label{font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+  textarea,input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+  textarea{min-height:96px;resize:vertical}
+  .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+  .row label{flex:1 1 140px}
+  ol{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;max-height:50vh;overflow:auto}
+  ol button{width:100%;text-align:left;display:flex;gap:10px;background:transparent;border-color:transparent;padding:8px 10px}
+  ol button .n{font-variant-numeric:tabular-nums;color:var(--muted);min-width:2.5em}
+  ol button .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  ol button .c{font-size:12px;color:var(--muted)}
+  ol button[aria-current="true"]{background:var(--line);color:var(--accent)}
+  .hint{font-size:12px;color:var(--muted);margin:0}
+  @media (orientation:landscape) and (max-height:500px){
+    .wrap{padding-block:0;gap:8px}
+    .stage{border-radius:0;height:100vh;aspect-ratio:auto}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage">
+    <div id="player"></div>
+    <div class="empty" id="empty">아래 「목록 설정」에 유튜브 재생목록이나 영상 링크를 넣어 주세요.</div>
+  </div>
+
+  <div class="bar">
+    <button class="round" id="prev" aria-label="이전 화">◀</button>
+    <div class="now">
+      <div class="ep" id="ep">— / —</div>
+      <div class="ttl" id="ttl">불러온 목록 없음</div>
+    </div>
+    <button class="round" id="next" aria-label="다음 화">▶</button>
+  </div>
+
+  <div class="credit">
+    <button class="primary" id="markCredit">지금부터 엔딩 크레딧 → 다음 화</button>
+  </div>
+  <div class="status" id="status"></div>
+
+  <details id="setup">
+    <summary>목록 설정</summary>
+    <div class="inner">
+      <label for="src">재생목록 링크, 또는 영상 링크를 한 줄에 하나씩
+        <textarea id="src" placeholder="https://www.youtube.com/playlist?list=...&#10;https://youtu.be/xxxxxxxxxxx"></textarea>
+      </label>
+      <div class="row">
+        <label for="credit">기본 크레딧 길이(초)
+          <input id="credit" type="number" min="0" max="600" step="1" inputmode="numeric">
+        </label>
+        <button class="primary" id="load">목록 불러오기</button>
+      </div>
+      <p class="hint">영상 끝에서 이 시간만큼 남으면 바로 다음 화로 넘어감. 화마다 다르면 크레딧 시작 시점에 위의 분홍 버튼을 누르면 그 화만 따로 기억함.</p>
+    </div>
+  </details>
+
+  <details id="listBox">
+    <summary>회차 목록</summary>
+    <div class="inner"><ol id="list"></ol></div>
+  </details>
+</div>
+
+<script>
+const KEY = 'yt-continue-v1';
+const $ = id => document.getElementById(id);
+let S = { ids: [], index: 0, credit: 15, over: {}, titles: {}, src: '' };
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.ids)) S = Object.assign(S, s); } catch (e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+
+let player = null, ready = false, pendingPlaylist = null, skippedFor = null;
+
+function parse(text) {
+  const ids = []; let list = null;
+  for (const raw of text.split(/\s+/)) {
+    const s = raw.trim(); if (!s) continue;
+    const l = s.match(/[?&]list=([\w-]+)/); if (l && !list) list = l[1];
+    const v = s.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/embed\/|\/live\/)([\w-]{11})/);
+    if (v) ids.push(v[1]); else if (/^[\w-]{11}$/.test(s)) ids.push(s);
+  }
+  return { list, ids };
+}
+
+function status(msg, ok) { const el = $('status'); el.textContent = msg || ''; el.className = 'status' + (ok ? ' ok' : ''); }
+
+function render() {
+  const n = S.ids.length, id = S.ids[S.index];
+  $('empty').hidden = n > 0;
+  $('ep').textContent = n ? `${S.index + 1}화 / ${n}` : '— / —';
+  $('ttl').textContent = n ? (S.titles[id] || '불러오는 중…') : '불러온 목록 없음';
+  $('prev').disabled = !n || S.index <= 0;
+  $('next').disabled = !n || S.index >= n - 1;
+  $('markCredit').disabled = !n;
+  const ol = $('list'); ol.innerHTML = '';
+  S.ids.forEach((vid, i) => {
+    const li = document.createElement('li'), b = document.createElement('button');
+    b.setAttribute('aria-current', i === S.index ? 'true' : 'false');
+    const c = S.over[vid] != null ? `크레딧 ${S.over[vid]}초` : '';
+    b.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span><span class="c">${c}</span>`;
+    b.querySelector('.t').textContent = S.titles[vid] || vid;
+    b.onclick = () => go(i);
+    li.appendChild(b); ol.appendChild(li);
+  });
+}
+
+function go(i, autoplay = true) {
+  if (!S.ids.length) return;
+  if (i < 0 || i >= S.ids.length) return;
+  S.index = i; skippedFor = null; save(); render();
+  if (ready) autoplay ? player.loadVideoById(S.ids[i]) : player.cueVideoById(S.ids[i]);
+}
+
+function next() {
+  if (S.index >= S.ids.length - 1) { status('마지막 화까지 봤음'); player && player.pauseVideo(); return; }
+  go(S.index + 1);
+}
+
+function onYouTubeIframeAPIReady() {
+  const vars = { playsinline: 1, rel: 0, modestbranding: 1 };
+  if (location.origin && location.origin !== 'null') vars.origin = location.origin;
+  player = new YT.Player('player', {
+    width: '100%', height: '100%',
+    videoId: S.ids[S.index] || undefined,
+    playerVars: vars,
+    events: {
+      onReady: () => { ready = true; if (pendingPlaylist) startPlaylist(pendingPlaylist); },
+      onStateChange: e => {
+        if (pendingPlaylist && (e.data === YT.PlayerState.CUED || e.data === YT.PlayerState.PLAYING)) {
+          const ids = player.getPlaylist();
+          if (ids && ids.length) {
+            pendingPlaylist = null; S.ids = ids; S.index = 0; save();
+            player.loadVideoById(ids[0]); render();
+            status(`${ids.length}개 영상 불러옴`, true);
+          }
+          return;
+        }
+        if (e.data === YT.PlayerState.PLAYING) {
+          const d = player.getVideoData(), id = S.ids[S.index];
+          if (d && d.title && id && S.titles[id] !== d.title) { S.titles[id] = d.title; save(); render(); }
+        }
+        if (e.data === YT.PlayerState.ENDED) next();
+      },
+      onError: e => {
+        const msg = { 2: '잘못된 영상 주소', 5: '재생 불가 영상', 100: '삭제됐거나 비공개 영상', 101: '퍼가기가 막힌 영상', 150: '퍼가기가 막힌 영상', 153: '페이지 주소 정보가 없어 재생이 막힘. 웹에 올린 주소로 열어야 함' }[e.data] || `오류 ${e.data}`;
+        status(`${S.index + 1}화: ${msg}. 다음 화로 넘어감`);
+        if (e.data !== 153) setTimeout(next, 1500);
+      }
+    }
+  });
+}
+
+function startPlaylist(list) {
+  pendingPlaylist = list;
+  if (ready) player.cuePlaylist({ list, listType: 'playlist' });
+}
+
+setInterval(() => {
+  if (!ready || !S.ids.length || pendingPlaylist) return;
+  if (player.getPlayerState() !== YT.PlayerState.PLAYING) return;
+  const id = S.ids[S.index]; if (skippedFor === id) return;
+  const d = player.getDuration(), t = player.getCurrentTime();
+  const credit = S.over[id] != null ? S.over[id] : S.credit;
+  if (d > 0 && credit > 0 && d - credit > 5 && t >= d - credit) {
+    skippedFor = id; status(`${S.index + 1}화 크레딧 건너뜀`, true); next();
+  }
+}, 400);
+
+$('prev').onclick = () => go(S.index - 1);
+$('next').onclick = () => go(S.index + 1);
+$('markCredit').onclick = () => {
+  if (!ready) return;
+  const id = S.ids[S.index], d = player.getDuration(), t = player.getCurrentTime();
+  if (!(d > 0)) return;
+  const sec = Math.max(1, Math.round(d - t));
+  S.over[id] = sec;
+  if (!S.creditSetByUser) { S.credit = sec; $('credit').value = sec; }
+  save(); status(`이 화 크레딧 ${sec}초로 기억함`, true); next();
+};
+$('credit').onchange = e => { const v = Math.max(0, Math.round(+e.target.value || 0)); S.credit = v; S.creditSetByUser = true; save(); };
+$('load').onclick = () => {
+  const text = $('src').value; const { list, ids } = parse(text);
+  S.src = text; S.over = S.over || {};
+  if (ids.length > 1 || (ids.length && !list)) {
+    S.ids = ids; S.index = 0; save(); go(0); status(`${ids.length}개 영상 불러옴`, true);
+  } else if (list) {
+    status('재생목록 불러오는 중…'); startPlaylist(list);
+  } else { status('링크에서 영상이나 재생목록을 찾지 못했음'); return; }
+  $('setup').open = false;
+};
+
+$('src').value = S.src || '';
+$('credit').value = S.credit;
+if (!S.ids.length) $('setup').open = true;
+render();
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
